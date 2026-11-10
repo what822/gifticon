@@ -1,0 +1,1057 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>기프티콘 지갑</title>
+  <meta name="theme-color" content="#4f46e5">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="기프티콘">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.12.3/dist/JsBarcode.all.min.js"></script>
+  <style>
+    html, body { overscroll-behavior-y: none; }
+    body { -webkit-tap-highlight-color: transparent; font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
+    button, label { -webkit-user-select: none; user-select: none; }
+    .safe-top { padding-top: env(safe-area-inset-top); }
+    .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+    .fab-pos { bottom: calc(1.5rem + env(safe-area-inset-bottom)); }
+    .card { transition: opacity .25s ease, transform .25s ease; }
+    .card.fade-out { opacity: 0; transform: translateX(40px) scale(.96); }
+    .sheet-panel { transition: transform .25s ease; }
+    .sheet-hidden .sheet-panel { transform: translateY(100%); }
+    .no-scroll { overflow: hidden; }
+    @keyframes urgentPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(220,38,38,.55); } 50% { box-shadow: 0 0 0 6px rgba(220,38,38,0); } }
+    .urgent-glow { animation: urgentPulse 1.6s infinite; }
+    #mBarcodeCanvas { width: 100%; height: auto; image-rendering: pixelated; image-rendering: crisp-edges; }
+    @keyframes scanLine { 0% { top: 8%; } 50% { top: 88%; } 100% { top: 8%; } }
+    .scan-line { position: absolute; left: 4%; right: 4%; height: 2px; background: #f43f5e; box-shadow: 0 0 12px #f43f5e; animation: scanLine 2.2s ease-in-out infinite; }
+    .scan-box { box-shadow: 0 0 0 9999px rgba(0,0,0,.55); }
+  </style>
+</head>
+<body class="bg-slate-100 min-h-screen text-slate-900">
+
+  <!-- ================= 연결 설정 화면 ================= -->
+  <section id="setup" class="hidden fixed inset-0 z-[70] bg-gradient-to-b from-indigo-600 to-indigo-800 overflow-y-auto safe-top safe-bottom">
+    <div class="max-w-md mx-auto px-6 py-10 text-white">
+      <img src="icon-192.png" alt="" class="w-20 h-20 rounded-3xl shadow-lg mx-auto">
+      <h1 class="text-2xl font-extrabold text-center mt-4">기프티콘 지갑</h1>
+      <p class="text-center text-indigo-100 text-sm mt-1">구글 시트와 연결하면 바로 사용할 수 있어요</p>
+
+      <form id="setupForm" class="mt-8 bg-white text-slate-900 rounded-3xl p-5 space-y-4 shadow-xl" autocomplete="off">
+        <div>
+          <label for="cfgUrl" class="block text-sm font-bold mb-1">웹 앱 주소 (…/exec)</label>
+          <input id="cfgUrl" type="url" required placeholder="https://script.google.com/macros/s/.../exec"
+                 class="w-full px-4 py-3 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        </div>
+        <div>
+          <label for="cfgToken" class="block text-sm font-bold mb-1">비밀번호</label>
+          <input id="cfgToken" type="password" required placeholder="Code.gs에 설정한 API_PASSWORD"
+                 class="w-full px-4 py-3 rounded-xl border border-slate-300 text-base focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        </div>
+        <p id="setupMsg" class="hidden text-sm font-bold"></p>
+        <button id="setupBtn" type="submit" class="w-full py-4 rounded-2xl bg-indigo-600 text-white text-lg font-extrabold active:scale-[.98] transition disabled:opacity-50">연결하기</button>
+        <button id="setupCancel" type="button" class="hidden w-full py-3 rounded-2xl bg-slate-100 font-bold">취소</button>
+        <button id="setupLogout" type="button" class="hidden w-full py-3 rounded-2xl text-red-600 font-bold">연결 해제 (이 기기에서 로그아웃)</button>
+      </form>
+      <p class="text-xs text-indigo-100 mt-4 leading-relaxed">입력한 주소와 비밀번호는 이 휴대폰에만 저장됩니다.</p>
+    </div>
+  </section>
+
+  <!-- ================= Header ================= -->
+  <header class="sticky top-0 z-30 bg-white/90 backdrop-blur border-b border-slate-200 safe-top">
+    <div class="max-w-xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
+      <div class="min-w-0">
+        <h1 class="text-xl font-extrabold flex items-center gap-2">🎁 기프티콘 지갑
+          <span id="offlineBadge" class="hidden text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-white">오프라인</span>
+        </h1>
+        <p id="summary" class="text-xs text-slate-500 mt-0.5">불러오는 중...</p>
+      </div>
+      <div class="flex gap-2 shrink-0">
+        <button id="refreshBtn" class="w-10 h-10 rounded-full bg-slate-100 active:bg-slate-200 flex items-center justify-center text-lg" aria-label="새로고침">⟳</button>
+        <button id="settingsBtn" class="w-10 h-10 rounded-full bg-slate-100 active:bg-slate-200 flex items-center justify-center text-lg" aria-label="설정">⚙️</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ================= List ================= -->
+  <main class="max-w-xl mx-auto px-4 pt-4 pb-32">
+    <div id="loading" class="hidden space-y-3">
+      <div class="h-36 rounded-2xl bg-white animate-pulse"></div>
+      <div class="h-36 rounded-2xl bg-white animate-pulse"></div>
+    </div>
+    <div id="empty" class="hidden text-center py-20 text-slate-400">
+      <div class="text-5xl mb-3">🗂️</div>
+      <p class="font-semibold">등록된 미사용 기프티콘이 없습니다.</p>
+      <p class="text-sm mt-1">오른쪽 아래 + 버튼으로 등록하세요.</p>
+    </div>
+    <div id="list" class="space-y-3"></div>
+  </main>
+
+  <!-- FAB -->
+  <button id="fab" class="fab-pos fixed right-6 z-30 w-16 h-16 rounded-full bg-indigo-600 text-white text-3xl font-light shadow-xl active:scale-95 transition" aria-label="기프티콘 등록">＋</button>
+
+  <!-- ================= Register Bottom Sheet ================= -->
+  <div id="sheet" class="fixed inset-0 z-40 sheet-hidden pointer-events-none">
+    <div id="sheetBackdrop" class="absolute inset-0 bg-black/50 opacity-0 transition-opacity"></div>
+    <div class="sheet-panel absolute bottom-0 left-0 right-0 max-w-xl mx-auto bg-white rounded-t-3xl max-h-[92vh] overflow-y-auto safe-bottom">
+      <div class="sticky top-0 z-10 bg-white px-5 pt-3 pb-2 border-b border-slate-100">
+        <div class="w-10 h-1.5 bg-slate-300 rounded-full mx-auto mb-3"></div>
+        <div class="flex items-center justify-between">
+          <h2 class="text-lg font-extrabold">기프티콘 등록</h2>
+          <button id="sheetClose" type="button" class="w-9 h-9 rounded-full bg-slate-100 text-xl leading-none">×</button>
+        </div>
+      </div>
+
+      <form id="regForm" class="px-5 py-4 space-y-4" autocomplete="off">
+        <div class="rounded-2xl border-2 border-dashed border-slate-300 p-3 bg-slate-50 text-center">
+          <img id="preview" class="hidden mx-auto max-h-56 rounded-xl object-contain mb-3" alt="미리보기">
+          <button id="scanBtn" type="button" class="w-full py-4 rounded-xl bg-indigo-600 text-white text-lg font-extrabold active:scale-[.98] transition">
+            ▮▯▮ 실시간 바코드 스캔
+          </button>
+          <div class="grid grid-cols-2 gap-2 mt-2">
+            <label for="cameraInput" class="cursor-pointer py-3 rounded-xl bg-white border border-slate-300 font-bold active:bg-slate-100">📷 사진 촬영</label>
+            <label for="galleryInput" class="cursor-pointer py-3 rounded-xl bg-white border border-slate-300 font-bold active:bg-slate-100">🖼️ 갤러리</label>
+          </div>
+          <input id="cameraInput" type="file" accept="image/*" capture="environment" class="hidden">
+          <input id="galleryInput" type="file" accept="image/*" class="hidden">
+          <p id="dropText" class="text-[11px] text-slate-500 mt-3">다른 폰 화면에 카메라를 비추면 바코드를 자동으로 읽어요.<br>저장된 기프티콘 이미지는 갤러리에서 선택하세요.</p>
+        </div>
+
+        <div id="ocrBox" class="hidden rounded-xl bg-indigo-50 p-3">
+          <div class="flex items-center justify-between text-sm">
+            <span id="ocrStatus" class="font-semibold text-indigo-700">유효기간 인식 준비 중...</span>
+            <span id="ocrPct" class="text-indigo-700 font-mono text-xs"></span>
+          </div>
+          <div class="h-2 bg-indigo-100 rounded-full mt-2 overflow-hidden">
+            <div id="ocrBar" class="h-full bg-indigo-600 rounded-full transition-all" style="width:0%"></div>
+          </div>
+          <details class="mt-2">
+            <summary class="text-xs text-indigo-600 cursor-pointer">인식된 원문 보기</summary>
+            <pre id="ocrRaw" class="mt-2 text-xs whitespace-pre-wrap text-slate-600 max-h-40 overflow-y-auto"></pre>
+          </details>
+        </div>
+
+        <div>
+          <label class="block text-sm font-bold mb-1" for="receiver">수신자명</label>
+          <input id="receiver" type="text" required placeholder="예: 홍길동"
+                 class="w-full px-4 py-3 rounded-xl border border-slate-300 text-base focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        </div>
+        <div>
+          <label class="block text-sm font-bold mb-1" for="barcode">바코드 번호 <span id="barcodeHint" class="text-xs font-normal text-slate-400">(자동 인식, 수정 가능)</span></label>
+          <input id="barcode" type="text" inputmode="numeric" required placeholder="숫자만 입력"
+                 class="w-full px-4 py-3 rounded-xl border border-slate-300 text-base font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        </div>
+        <div>
+          <label class="block text-sm font-bold mb-1" for="expiry">유효기간 <span class="text-xs font-normal text-slate-400">(자동 인식, 수정 가능)</span></label>
+          <input id="expiry" type="date" required
+                 class="w-full px-4 py-3 rounded-xl border border-slate-300 text-base focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        </div>
+
+        <button id="submitBtn" type="submit"
+                class="w-full py-4 rounded-2xl bg-indigo-600 text-white text-lg font-extrabold active:scale-[.98] transition disabled:opacity-50">
+          등록하기
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ================= 실시간 스캐너 ================= -->
+  <div id="scanner" class="hidden fixed inset-0 z-[60] bg-black">
+    <video id="scanVideo" class="absolute inset-0 w-full h-full object-cover" playsinline muted autoplay></video>
+    <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+      <div class="scan-box relative w-[86%] max-w-md h-44 rounded-2xl border-4 border-white/90">
+        <div class="scan-line"></div>
+      </div>
+    </div>
+    <div class="absolute top-0 left-0 right-0 safe-top">
+      <div class="flex items-center justify-between px-4 py-3">
+        <button id="scanClose" type="button" class="w-11 h-11 rounded-full bg-black/60 text-white text-2xl leading-none">×</button>
+        <button id="torchBtn" type="button" class="hidden w-11 h-11 rounded-full bg-black/60 text-white text-xl">🔦</button>
+      </div>
+      <p id="scanStatus" class="text-center text-white font-bold text-base px-6 drop-shadow">카메라 켜는 중...</p>
+    </div>
+    <div class="absolute bottom-0 left-0 right-0 safe-bottom">
+      <div class="flex flex-col items-center gap-3 pb-8">
+        <p class="text-white/80 text-xs text-center px-6">바코드를 네모 칸 안에 맞춰 주세요. 상대 폰 밝기를 최대로 하면 잘 읽혀요.</p>
+        <button id="shutterBtn" type="button" class="w-20 h-20 rounded-full bg-white border-[6px] border-white/40 active:scale-95 transition" aria-label="직접 촬영"></button>
+        <p class="text-white/60 text-[11px]">자동으로 안 읽히면 가운데 버튼으로 직접 찍으세요</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 바코드 확대 모달 ================= -->
+  <div id="modal" class="fixed inset-0 z-50 hidden bg-white flex-col safe-top safe-bottom">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-slate-200">
+      <div class="min-w-0">
+        <p id="mReceiver" class="font-extrabold truncate"></p>
+        <p id="mExpiry" class="text-xs text-slate-500"></p>
+      </div>
+      <button id="modalClose" class="w-11 h-11 rounded-full bg-slate-900 text-white text-2xl leading-none shrink-0">×</button>
+    </div>
+    <div class="flex-1 min-h-0 flex flex-col items-center justify-center p-3 bg-white overflow-hidden">
+      <div id="mCodeView" class="w-full flex flex-col items-center justify-center">
+        <canvas id="mBarcodeCanvas"></canvas>
+      </div>
+      <img id="mImg" class="hidden max-w-full max-h-full object-contain" alt="기프티콘">
+    </div>
+    <div class="px-4 py-3 border-t border-slate-200 text-center">
+      <p id="mBarcode" class="font-mono text-2xl font-extrabold tracking-widest break-all"></p>
+      <button id="mToggle" type="button" class="mt-2 px-4 py-2 rounded-full bg-slate-100 text-sm font-bold active:bg-slate-200">🖼️ 원본 이미지 보기</button>
+      <p class="text-xs text-slate-400 mt-2">빈 곳을 터치하면 닫힙니다</p>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="hidden"></div>
+
+<script>
+  /* =========================================================
+   * 설정 / 상태
+   * ========================================================= */
+  const ALERT_DAYS = 7;
+  const LS_CFG = 'gifticon_cfg';
+  const LS_CACHE = 'gifticon_cache';
+  const state = {
+    items: [], file: null, workerPromise: null, ocrToken: 0, busy: false,
+    wakeLock: null, barcodeFromScan: false, modalMode: 'code', cfg: null
+  };
+  const imgCache = {};
+  const $ = (id) => document.getElementById(id);
+
+  function lsGet(key) { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { return null; } }
+  function lsSet(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} }
+  function lsDel(key) { try { localStorage.removeItem(key); } catch (e) {} }
+
+  /* =========================================================
+   * 유틸
+   * ========================================================= */
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  const pad = (n) => ('0' + n).slice(-2);
+  function thumbUrl(fileId, w) { return 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(fileId) + '&sz=w' + w; }
+  function fmtBarcode(b) { return String(b || '').replace(/\s+/g, '').replace(/(.{4})(?=.)/g, '$1 '); }
+  function calcDays(expiry) {
+    const m = String(expiry || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    const now = new Date();
+    return Math.round((Date.UTC(+m[1], +m[2] - 1, +m[3]) - Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000);
+  }
+  function dLabel(d) {
+    if (d === null || d === undefined) return '기한 없음';
+    if (d < 0) return '만료 ' + Math.abs(d) + '일 지남';
+    if (d === 0) return 'D-DAY';
+    return 'D-' + d;
+  }
+  const isUrgent = (it) => it.daysLeft !== null && it.daysLeft <= ALERT_DAYS;
+  const isExpired = (it) => it.daysLeft !== null && it.daysLeft < 0;
+
+  let toastTimer;
+  function toast(msg, isError) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.className = 'fixed left-1/2 -translate-x-1/2 top-[calc(5rem+env(safe-area-inset-top))] z-[80] px-4 py-3 rounded-xl text-white text-sm font-semibold shadow-lg w-max max-w-[90vw] text-center ' + (isError ? 'bg-red-600' : 'bg-slate-900');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.className = 'hidden'; }, 2800);
+  }
+
+  /* =========================================================
+   * API (구글 Apps Script)
+   * ========================================================= */
+  async function api(action, payload, cfgOverride) {
+    const cfg = cfgOverride || state.cfg;
+    if (!cfg) throw new Error('연결 설정이 필요합니다.');
+    if (!navigator.onLine) throw new Error('인터넷에 연결되어 있지 않습니다.');
+    let res;
+    try {
+      res = await fetch(cfg.url, {
+        method: 'POST',
+        redirect: 'follow',
+        body: JSON.stringify(Object.assign({ action, token: cfg.token }, payload || {}))
+      });
+    } catch (e) {
+      throw new Error('서버에 연결할 수 없습니다. 주소와 배포 설정(액세스: 모든 사용자)을 확인하세요.');
+    }
+    let j;
+    try { j = await res.json(); } catch (e) {
+      throw new Error('서버 응답을 읽을 수 없습니다. 웹 앱 주소(…/exec)와 배포 설정을 확인하세요.');
+    }
+    if (!j.ok) {
+      const err = new Error(j.error || '알 수 없는 오류');
+      err.code = j.code;
+      throw err;
+    }
+    return j.data;
+  }
+
+  function handleAuthError(e) {
+    if (e && (e.code === 'AUTH' || e.code === 'NO_PASSWORD')) {
+      openSetup(true, e.message);
+      return true;
+    }
+    return false;
+  }
+
+  /* =========================================================
+   * 연결 설정 화면
+   * ========================================================= */
+  function openSetup(canCancel, msg) {
+    const c = state.cfg || {};
+    $('cfgUrl').value = c.url || '';
+    $('cfgToken').value = c.token || '';
+    $('setupCancel').classList.toggle('hidden', !canCancel || !state.cfg);
+    $('setupLogout').classList.toggle('hidden', !state.cfg);
+    setSetupMsg(msg || '', true);
+    $('setup').classList.remove('hidden');
+  }
+  function closeSetup() { $('setup').classList.add('hidden'); }
+  function setSetupMsg(msg, isError) {
+    const el = $('setupMsg');
+    el.textContent = msg;
+    el.className = msg ? 'text-sm font-bold ' + (isError ? 'text-red-600' : 'text-emerald-600') : 'hidden';
+  }
+
+  $('setupForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const url = $('cfgUrl').value.trim();
+    const token = $('cfgToken').value;
+    if (!/^https:\/\/script\.google\.com\/.+\/exec\/?$/.test(url)) {
+      setSetupMsg('주소는 https://script.google.com/… 으로 시작하고 /exec 로 끝나야 해요.', true);
+      return;
+    }
+    const btn = $('setupBtn');
+    btn.disabled = true;
+    btn.textContent = '연결 확인 중...';
+    setSetupMsg('', false);
+    try {
+      await api('ping', {}, { url, token });
+      state.cfg = { url, token };
+      lsSet(LS_CFG, state.cfg);
+      closeSetup();
+      toast('연결되었습니다.');
+      loadList();
+    } catch (err) {
+      setSetupMsg(err.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '연결하기';
+    }
+  });
+  $('setupCancel').addEventListener('click', closeSetup);
+  $('setupLogout').addEventListener('click', () => {
+    if (!confirm('이 기기에서 연결을 해제할까요? (구글 시트의 데이터는 그대로 남아요)')) return;
+    state.cfg = null;
+    state.items = [];
+    lsDel(LS_CFG);
+    lsDel(LS_CACHE);
+    render();
+    openSetup(false);
+  });
+  $('settingsBtn').addEventListener('click', () => openSetup(true));
+
+  /* =========================================================
+   * 목록
+   * ========================================================= */
+  function normalizeItems(items) {
+    return (items || []).map((it) => Object.assign({}, it, { daysLeft: calcDays(it.expiry) }));
+  }
+  function sortItems(items) {
+    return items.sort((a, b) => {
+      if (a.daysLeft === null && b.daysLeft === null) return 0;
+      if (a.daysLeft === null) return 1;
+      if (b.daysLeft === null) return -1;
+      return a.daysLeft - b.daysLeft;
+    });
+  }
+  function saveCache() { lsSet(LS_CACHE, { items: state.items, savedAt: Date.now() }); }
+
+  async function loadList() {
+    if (!state.cfg) return;
+    if (!state.items.length) $('loading').classList.remove('hidden');
+    $('refreshBtn').classList.add('animate-spin');
+    try {
+      state.items = normalizeItems(await api('list'));
+      saveCache();
+      render();
+    } catch (e) {
+      if (handleAuthError(e)) return;
+      const cache = lsGet(LS_CACHE);
+      if (cache && cache.items) {
+        state.items = normalizeItems(cache.items);
+        render();
+        toast('최신 목록을 못 불러와 저장된 목록을 보여드려요.', true);
+      } else {
+        $('summary').textContent = '불러오기 실패';
+        toast(e.message, true);
+      }
+    } finally {
+      $('loading').classList.add('hidden');
+      $('refreshBtn').classList.remove('animate-spin');
+    }
+  }
+
+  function updateSummary() {
+    const total = state.items.length;
+    const urgent = state.items.filter(isUrgent).length;
+    $('summary').innerHTML = '미사용 <b>' + total + '</b>건' +
+      (urgent ? ' · <span class="text-red-600 font-extrabold">임박/만료 ' + urgent + '건</span>' : '');
+  }
+
+  function cardHtml(it) {
+    const urgent = isUrgent(it), expired = isExpired(it);
+    const wrap = urgent ? 'border-2 border-red-500 bg-red-50 urgent-glow' : 'border border-slate-200 bg-white';
+    const badge = expired ? 'bg-red-800 text-white' : urgent ? 'bg-red-600 text-white' : 'bg-emerald-100 text-emerald-700';
+    const banner = urgent
+      ? '<div class="bg-red-600 text-white text-sm font-extrabold px-4 py-2">⚠️ ' + (expired ? '유효기간이 만료되었습니다' : '유효기간 ' + ALERT_DAYS + '일 이내 임박!') + '</div>'
+      : '';
+    const thumb = it.fileId
+      ? '<img data-file="' + esc(it.fileId) + '" src="' + thumbUrl(it.fileId, 400) + '" class="w-full h-full object-cover" loading="lazy" alt="">'
+      : '<div class="w-full h-full flex items-center justify-center text-3xl">🎁</div>';
+    return '' +
+      '<article id="card-' + esc(it.id) + '" class="card rounded-2xl shadow-sm overflow-hidden ' + wrap + '">' + banner +
+        '<button type="button" data-action="zoom" data-id="' + esc(it.id) + '" class="w-full text-left flex gap-3 p-3 active:bg-black/5">' +
+          '<div class="relative shrink-0 w-24 h-24 rounded-xl overflow-hidden bg-slate-100 border border-slate-200">' + thumb +
+            '<span class="absolute bottom-1 right-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded">확대</span></div>' +
+          '<div class="min-w-0 flex-1">' +
+            '<div class="flex items-start justify-between gap-2">' +
+              '<p class="font-extrabold text-base truncate">' + (esc(it.receiver) || '(수신자 없음)') + '</p>' +
+              '<span class="shrink-0 text-xs font-extrabold px-2.5 py-1 rounded-full ' + badge + '">' + dLabel(it.daysLeft) + '</span>' +
+            '</div>' +
+            '<p class="font-mono text-sm mt-1.5 break-all tracking-wide">' + (esc(fmtBarcode(it.barcode)) || '-') + '</p>' +
+            '<p class="text-sm mt-1.5 ' + (urgent ? 'text-red-700 font-extrabold' : 'text-slate-500') + '">유효기간 ' + (esc(it.expiry) || '-') + '</p>' +
+          '</div>' +
+        '</button>' +
+        '<div class="px-3 pb-3"><button type="button" data-action="use" data-id="' + esc(it.id) + '" class="w-full py-3 rounded-xl font-extrabold active:scale-[.98] transition ' +
+          (urgent ? 'bg-red-600 text-white' : 'bg-slate-900 text-white') + '">✓ 사용 완료</button></div>' +
+      '</article>';
+  }
+
+  function render() {
+    sortItems(state.items);
+    updateSummary();
+    const list = $('list');
+    if (!state.items.length) {
+      list.innerHTML = '';
+      $('empty').classList.toggle('hidden', !state.cfg);
+      return;
+    }
+    $('empty').classList.add('hidden');
+    list.innerHTML = state.items.map(cardHtml).join('');
+    list.querySelectorAll('img[data-file]').forEach((img) => img.addEventListener('error', () => fallbackImg(img), { once: true }));
+  }
+
+  async function fallbackImg(img) {
+    const id = img.dataset.file;
+    if (!id) return;
+    try {
+      imgCache[id] = imgCache[id] || api('image', { fileId: id });
+      img.src = await imgCache[id];
+    } catch (e) {
+      delete imgCache[id];
+      img.replaceWith(Object.assign(document.createElement('div'), { className: 'w-full h-full flex items-center justify-center text-3xl', textContent: '🎁' }));
+    }
+  }
+
+  $('list').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    if (btn.dataset.action === 'zoom') openModal(btn.dataset.id);
+    if (btn.dataset.action === 'use') completeItem(btn.dataset.id);
+  });
+
+  async function completeItem(id) {
+    const idx = state.items.findIndex((x) => x.id === id);
+    if (idx < 0) return;
+    const it = state.items[idx];
+    if (!confirm('[' + (it.receiver || '수신자 없음') + '] 기프티콘을 사용 완료 처리할까요?')) return;
+    const el = document.getElementById('card-' + id);
+    if (el) el.classList.add('fade-out');
+    state.items.splice(idx, 1);
+    setTimeout(render, 260);
+    try {
+      await api('use', { id });
+      saveCache();
+      toast('사용 완료 처리되었습니다.');
+    } catch (e) {
+      state.items.push(it);
+      render();
+      if (!handleAuthError(e)) toast('처리 실패: ' + e.message, true);
+    }
+  }
+
+  /* =========================================================
+   * 바코드 확대 모달
+   * ========================================================= */
+  async function requestWakeLock() { try { if ('wakeLock' in navigator) state.wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {} }
+  function releaseWakeLock() { try { if (state.wakeLock) state.wakeLock.release(); } catch (e) {} state.wakeLock = null; }
+
+  function pickBarcodeFormat(code) {
+    if (/^\d{13}$/.test(code)) {
+      let sum = 0;
+      for (let i = 0; i < 12; i++) sum += (+code[i]) * (i % 2 ? 3 : 1);
+      if ((10 - (sum % 10)) % 10 === +code[12]) return 'EAN13';
+    }
+    return 'CODE128';
+  }
+  function drawBarcode(code) {
+    const value = String(code || '').replace(/\s+/g, '');
+    if (!value || typeof JsBarcode === 'undefined') return false;
+    const opts = { width: 4, height: 220, margin: 24, displayValue: false, background: '#ffffff', lineColor: '#000000' };
+    try { JsBarcode($('mBarcodeCanvas'), value, Object.assign({ format: pickBarcodeFormat(value) }, opts)); return true; }
+    catch (e) {
+      try { JsBarcode($('mBarcodeCanvas'), value, Object.assign({ format: 'CODE128' }, opts)); return true; }
+      catch (e2) { return false; }
+    }
+  }
+  function setModalMode(mode) {
+    state.modalMode = mode;
+    const showCode = mode === 'code';
+    $('mCodeView').classList.toggle('hidden', !showCode);
+    $('mImg').classList.toggle('hidden', showCode);
+    $('mToggle').textContent = showCode ? '🖼️ 원본 이미지 보기' : '▮▯▮ 바코드 보기';
+  }
+  function openModal(id) {
+    const it = state.items.find((x) => x.id === id);
+    if (!it) return;
+    const img = $('mImg');
+    img.removeAttribute('src');
+    if (it.fileId) {
+      if (imgCache[it.fileId]) {
+        imgCache[it.fileId].then((src) => { img.src = src; }).catch(() => {});
+      } else {
+        img.dataset.file = it.fileId;
+        img.addEventListener('error', () => fallbackImg(img), { once: true });
+        img.src = thumbUrl(it.fileId, 2000);
+      }
+    }
+    const ok = drawBarcode(it.barcode);
+    $('mToggle').classList.toggle('hidden', !ok || !it.fileId);
+    setModalMode(ok ? 'code' : 'image');
+    $('mReceiver').textContent = it.receiver || '(수신자 없음)';
+    $('mExpiry').textContent = '유효기간 ' + (it.expiry || '-') + ' · ' + dLabel(it.daysLeft);
+    $('mExpiry').className = 'text-xs ' + (isUrgent(it) ? 'text-red-600 font-extrabold' : 'text-slate-500');
+    $('mBarcode').textContent = fmtBarcode(it.barcode);
+    $('modal').classList.remove('hidden');
+    $('modal').classList.add('flex');
+    document.body.classList.add('no-scroll');
+    requestWakeLock();
+  }
+  function closeModal() {
+    $('modal').classList.add('hidden');
+    $('modal').classList.remove('flex');
+    document.body.classList.remove('no-scroll');
+    releaseWakeLock();
+  }
+  $('modal').addEventListener('click', closeModal);
+  $('mToggle').addEventListener('click', (e) => { e.stopPropagation(); setModalMode(state.modalMode === 'code' ? 'image' : 'code'); });
+
+  /* =========================================================
+   * 등록 시트
+   * ========================================================= */
+  function openSheet() {
+    $('sheet').classList.remove('sheet-hidden', 'pointer-events-none');
+    $('sheetBackdrop').classList.replace('opacity-0', 'opacity-100');
+    document.body.classList.add('no-scroll');
+  }
+  function closeSheet() {
+    $('sheet').classList.add('sheet-hidden', 'pointer-events-none');
+    $('sheetBackdrop').classList.replace('opacity-100', 'opacity-0');
+    document.body.classList.remove('no-scroll');
+  }
+  function setBarcodeHint(text, cls) {
+    $('barcodeHint').textContent = text;
+    $('barcodeHint').className = 'text-xs ' + (cls || 'font-normal text-slate-400');
+  }
+  function resetForm() {
+    $('regForm').reset();
+    state.file = null;
+    state.barcodeFromScan = false;
+    state.ocrToken++;
+    setBarcodeHint('(자동 인식, 수정 가능)');
+    $('preview').classList.add('hidden');
+    $('preview').removeAttribute('src');
+    $('dropText').classList.remove('hidden');
+    $('ocrBox').classList.add('hidden');
+    $('ocrRaw').textContent = '';
+    setProgress(0, '');
+  }
+
+  /* =========================================================
+   * OCR (유효기간 + 보조 바코드 번호)
+   * ========================================================= */
+  function setProgress(p, text) {
+    if (text) $('ocrStatus').textContent = text;
+    if (typeof p === 'number') {
+      const pct = Math.round(p * 100);
+      $('ocrBar').style.width = pct + '%';
+      $('ocrPct').textContent = pct ? pct + '%' : '';
+    }
+  }
+  const STATUS_KO = {
+    'loading tesseract core': '글자 인식 엔진 로딩 중...',
+    'initializing tesseract': '글자 인식 엔진 초기화 중...',
+    'loading language traineddata': '언어 데이터 다운로드 중... (처음 한 번)',
+    'initializing api': '글자 인식 준비 중...',
+    'recognizing text': '유효기간 읽는 중...'
+  };
+  function getWorker() {
+    if (typeof Tesseract === 'undefined') return Promise.reject(new Error('OCR 엔진을 불러오지 못했습니다.'));
+    if (!state.workerPromise) {
+      state.workerPromise = Tesseract.createWorker('kor+eng', 1, {
+        logger: (m) => setProgress(typeof m.progress === 'number' ? m.progress : null, STATUS_KO[m.status] || null)
+      }).catch((e) => { state.workerPromise = null; throw e; });
+    }
+    return state.workerPromise;
+  }
+  function loadImage(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('이미지를 읽을 수 없습니다.')); };
+      img.src = url;
+    });
+  }
+  async function preprocess(file) {
+    const img = await loadImage(file);
+    let w = img.naturalWidth, h = img.naturalHeight;
+    const scale = w < 1000 ? 1000 / w : (w > 2000 ? 2000 / w : 1);
+    w = Math.round(w * scale); h = Math.round(h * scale);
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    const data = ctx.getImageData(0, 0, w, h);
+    const d = data.data;
+    for (let i = 0; i < d.length; i += 4) {
+      let g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      g = (g - 128) * 1.5 + 128;
+      g = g < 0 ? 0 : g > 255 ? 255 : g;
+      d[i] = d[i + 1] = d[i + 2] = g;
+    }
+    ctx.putImageData(data, 0, 0);
+    return c;
+  }
+  function parseOcr(text) {
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const KW = /유효|기간|기한|까지|만료|사용/;
+    const dates = [];
+    const dateRe = /(20\d{2})\s*[.\-\/년]\s*(\d{1,2})\s*[.\-\/월]\s*(\d{1,2})/g;
+    const compactRe = /(?:^|\D)(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)/g;
+    lines.forEach((line, i) => {
+      const kw = KW.test(line + ' ' + (lines[i - 1] || ''));
+      let m;
+      dateRe.lastIndex = 0;
+      while ((m = dateRe.exec(line))) {
+        const y = +m[1], mo = +m[2], d = +m[3];
+        if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) dates.push({ v: y + '-' + pad(mo) + '-' + pad(d), kw });
+      }
+      if (kw) {
+        compactRe.lastIndex = 0;
+        while ((m = compactRe.exec(line))) dates.push({ v: m[1] + '-' + m[2] + '-' + m[3], kw });
+      }
+    });
+    const kwDates = dates.filter((x) => x.kw).map((x) => x.v).sort();
+    const allDates = dates.map((x) => x.v).sort();
+    const expiry = kwDates.length ? kwDates[kwDates.length - 1] : (allDates.length ? allDates[allDates.length - 1] : '');
+
+    const cands = [];
+    lines.forEach((line) => {
+      const fixed = line.replace(/(?<=\d)[Oo](?=\d)/g, '0').replace(/(?<=\d)[lI|](?=\d)/g, '1');
+      (fixed.match(/\d[\d \-]{8,}\d/g) || []).forEach((s) => {
+        const digits = s.replace(/\D/g, '');
+        if (digits.length < 10 || digits.length > 24) return;
+        if (/^20\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])$/.test(digits)) return;
+        if (/^0(1[016789]|2|[3-6]\d|70)\d{7,8}$/.test(digits) && /-/.test(s)) return;
+        cands.push({ digits, score: (digits.length >= 12 && digits.length <= 16 ? 100 : 0) + digits.length + (/ /.test(s) ? 5 : 0) });
+      });
+    });
+    cands.sort((a, b) => b.score - a.score);
+    return { barcode: cands.length ? cands[0].digits : '', expiry };
+  }
+  async function runOcr(file, token) {
+    $('ocrBox').classList.remove('hidden');
+    $('ocrRaw').textContent = '';
+    setProgress(0, '글자 인식 엔진 로딩 중...');
+    try {
+      const worker = await getWorker();
+      const canvas = await preprocess(file);
+      if (token !== state.ocrToken) return;
+      setProgress(0, '유효기간 읽는 중...');
+      const { data } = await worker.recognize(canvas);
+      if (token !== state.ocrToken) return;
+      const text = data.text || '';
+      $('ocrRaw').textContent = text || '(인식된 텍스트 없음)';
+      const r = parseOcr(text);
+      if (r.barcode && !state.barcodeFromScan && !$('barcode').value) $('barcode').value = r.barcode;
+      if (r.expiry) $('expiry').value = r.expiry;
+      setProgress(1, r.expiry ? '✅ 인식 완료 — 값을 확인/수정하세요' : '⚠️ 유효기간을 못 읽었어요 — 직접 입력하세요');
+      if (!$('receiver').value) $('receiver').focus();
+    } catch (e) {
+      if (token !== state.ocrToken) return;
+      setProgress(0, '⚠️ 글자 인식 오류 — 직접 입력하세요');
+      console.error(e);
+    }
+  }
+
+  /* =========================================================
+   * 바코드 인식 (ZXing / 네이티브 BarcodeDetector)
+   * ========================================================= */
+  function makeBarcodeReader() {
+    const reader = new ZXing.MultiFormatReader();
+    const F = ZXing.BarcodeFormat;
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [F.CODE_128, F.EAN_13, F.EAN_8, F.CODE_39, F.ITF, F.UPC_A, F.QR_CODE]);
+    reader.setHints(hints);
+    return reader;
+  }
+  function drawScaled(src, targetSize, rotate) {
+    const sw = src.naturalWidth || src.videoWidth || src.width, sh = src.naturalHeight || src.videoHeight || src.height;
+    const s = targetSize / Math.max(sw, sh);
+    const w = Math.round(sw * s), h = Math.round(sh * s);
+    const c = document.createElement('canvas');
+    c.width = rotate ? h : w;
+    c.height = rotate ? w : h;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, c.width, c.height);
+    if (rotate) { ctx.translate(h, 0); ctx.rotate(Math.PI / 2); }
+    ctx.drawImage(src, 0, 0, w, h);
+    return c;
+  }
+  /* 사진 가장자리의 어두운 영역(폰 테두리·배경)을 흰색으로 지움 — 인식률 개선 */
+  function trimDarkEdges(lum, w, h) {
+    let sum = 0, n = 0;
+    for (let i = 0; i < lum.length; i += 7) { sum += lum[i]; n++; }
+    const thr = Math.min(150, Math.max(70, (sum / n) * 0.75));
+    for (let y = 0; y < h; y++) {
+      const o = y * w;
+      let x = 0;
+      while (x < w && lum[o + x] < thr) { lum[o + x] = 255; x++; }
+      x = w - 1;
+      while (x >= 0 && lum[o + x] < thr) { lum[o + x] = 255; x--; }
+    }
+  }
+  function zxingDecode(canvas, reader, trim) {
+    const d = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, canvas.width, canvas.height).data;
+    const lum = new Uint8ClampedArray(canvas.width * canvas.height);
+    for (let i = 0, j = 0; i < d.length; i += 4, j++) lum[j] = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+    if (trim) trimDarkEdges(lum, canvas.width, canvas.height);
+    try {
+      return reader.decode(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.RGBLuminanceSource(lum, canvas.width, canvas.height))));
+    } catch (e) {
+      return null;
+    } finally {
+      reader.reset();
+    }
+  }
+  async function decodeBarcodeFromFile(file) {
+    if (typeof ZXing === 'undefined') return null;
+    const img = await loadImage(file);
+    const reader = makeBarcodeReader();
+    for (const size of [1000, 700, 1600]) {
+      for (const rotate of [false, true]) {
+        const c = drawScaled(img, size, rotate);
+        for (const trim of [true, false]) {
+          const r = zxingDecode(c, reader, trim);
+          if (r && r.getText()) return r.getText().trim();
+          await new Promise((res) => setTimeout(res, 0));
+        }
+      }
+    }
+    return null;
+  }
+
+  /* 사진(촬영/갤러리/스캐너 캡처) 처리 공통 */
+  function useImage(file, scannedCode) {
+    state.file = file;
+    const token = ++state.ocrToken;
+    $('barcode').value = '';
+    $('expiry').value = '';
+    $('preview').src = URL.createObjectURL(file);
+    $('preview').classList.remove('hidden');
+    $('dropText').classList.add('hidden');
+
+    if (scannedCode) {
+      state.barcodeFromScan = true;
+      $('barcode').value = scannedCode;
+      setBarcodeHint('✅ 실시간 스캔으로 읽음', 'font-bold text-emerald-600');
+    } else {
+      state.barcodeFromScan = false;
+      setBarcodeHint('바코드 읽는 중...');
+      decodeBarcodeFromFile(file).then((code) => {
+        if (token !== state.ocrToken) return;
+        if (code) {
+          state.barcodeFromScan = true;
+          $('barcode').value = code;
+          setBarcodeHint('✅ 바코드에서 직접 읽음', 'font-bold text-emerald-600');
+        } else {
+          setBarcodeHint('바코드 인식 실패 — 글자 인식 결과를 확인하세요', 'font-normal text-amber-600');
+        }
+      }).catch(console.error);
+    }
+    runOcr(file, token);
+  }
+
+  function onFilePicked(e) {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    if (f.type && !/^image\//.test(f.type)) { toast('이미지 파일만 선택할 수 있습니다.', true); return; }
+    useImage(f, null);
+  }
+  $('cameraInput').addEventListener('change', onFilePicked);
+  $('galleryInput').addEventListener('change', onFilePicked);
+
+  /* =========================================================
+   * 실시간 카메라 스캐너
+   * ========================================================= */
+  const scan = { stream: null, timer: null, active: false, busy: false, detector: null, reader: null, tick: 0, torch: false };
+
+  async function openScanner() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      toast('이 브라우저에서는 실시간 카메라를 쓸 수 없어요. "사진 촬영"을 이용하세요.', true);
+      return;
+    }
+    $('scanner').classList.remove('hidden');
+    $('scanStatus').textContent = '카메라 켜는 중...';
+    $('torchBtn').classList.add('hidden');
+    try {
+      scan.stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+      });
+    } catch (e) {
+      $('scanner').classList.add('hidden');
+      toast('카메라 권한이 필요해요. 설정에서 카메라 접근을 허용해 주세요.', true);
+      return;
+    }
+    const video = $('scanVideo');
+    video.srcObject = scan.stream;
+    try { await video.play(); } catch (e) {}
+
+    try {
+      const track = scan.stream.getVideoTracks()[0];
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      if (caps && caps.torch) $('torchBtn').classList.remove('hidden');
+      if (caps && caps.focusMode && caps.focusMode.includes('continuous')) {
+        track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+      }
+    } catch (e) {}
+
+    scan.detector = null;
+    if ('BarcodeDetector' in window) {
+      try {
+        const supported = await window.BarcodeDetector.getSupportedFormats();
+        const want = ['code_128', 'ean_13', 'ean_8', 'code_39', 'itf', 'upc_a', 'qr_code'].filter((f) => supported.includes(f));
+        if (want.length) scan.detector = new window.BarcodeDetector({ formats: want });
+      } catch (e) { scan.detector = null; }
+    }
+    if (!scan.detector && typeof ZXing !== 'undefined') scan.reader = scan.reader || makeBarcodeReader();
+
+    $('scanStatus').textContent = '바코드를 비춰 주세요';
+    scan.active = true;
+    scan.busy = false;
+    scanTick();
+  }
+
+  async function detectFrame(video) {
+    if (scan.detector) {
+      const r = await scan.detector.detect(video);
+      return r && r.length ? r[0].rawValue : null;
+    }
+    if (!scan.reader) return null;
+    // 프레임마다 다른 방식으로 번갈아 시도 (크기 / 회전 / 가장자리 정리)
+    const VARIANTS = [
+      { size: 1000, rotate: false, trim: true },
+      { size: 700, rotate: false, trim: true },
+      { size: 1000, rotate: false, trim: false },
+      { size: 1000, rotate: true, trim: true }
+    ];
+    const v = VARIANTS[scan.tick++ % VARIANTS.length];
+    const r = zxingDecode(drawScaled(video, v.size, v.rotate), scan.reader, v.trim);
+    return r ? r.getText() : null;
+  }
+
+  async function scanTick() {
+    if (!scan.active) return;
+    const video = $('scanVideo');
+    if (video.readyState >= 2 && video.videoWidth && !scan.busy) {
+      scan.busy = true;
+      try {
+        const code = await detectFrame(video);
+        if (code && scan.active) {
+          const clean = String(code).trim();
+          if (navigator.vibrate) navigator.vibrate(80);
+          $('scanStatus').textContent = '✅ 인식 완료: ' + clean;
+          const file = await captureFrame();
+          closeScanner();
+          if (file) useImage(file, clean);
+          return;
+        }
+      } catch (e) { console.error(e); }
+      scan.busy = false;
+    }
+    scan.timer = setTimeout(scanTick, scan.detector ? 150 : 250);
+  }
+
+  function captureFrame() {
+    const video = $('scanVideo');
+    if (!video.videoWidth) return Promise.resolve(null);
+    const c = document.createElement('canvas');
+    c.width = video.videoWidth;
+    c.height = video.videoHeight;
+    c.getContext('2d').drawImage(video, 0, 0);
+    return new Promise((resolve) => c.toBlob((b) => {
+      resolve(b ? new File([b], 'scan_' + Date.now() + '.jpg', { type: 'image/jpeg' }) : null);
+    }, 'image/jpeg', 0.92));
+  }
+
+  function closeScanner() {
+    scan.active = false;
+    clearTimeout(scan.timer);
+    if (scan.stream) scan.stream.getTracks().forEach((t) => t.stop());
+    scan.stream = null;
+    scan.torch = false;
+    $('scanVideo').srcObject = null;
+    $('scanner').classList.add('hidden');
+  }
+
+  $('scanBtn').addEventListener('click', openScanner);
+  $('scanClose').addEventListener('click', closeScanner);
+  $('shutterBtn').addEventListener('click', async () => {
+    const file = await captureFrame();
+    closeScanner();
+    if (file) useImage(file, null);
+  });
+  $('torchBtn').addEventListener('click', async () => {
+    try {
+      const track = scan.stream && scan.stream.getVideoTracks()[0];
+      if (!track) return;
+      scan.torch = !scan.torch;
+      await track.applyConstraints({ advanced: [{ torch: scan.torch }] });
+    } catch (e) { toast('플래시를 켤 수 없어요.', true); }
+  });
+
+  /* =========================================================
+   * 업로드 & 등록
+   * ========================================================= */
+  function readAsBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(',')[1]);
+      r.onerror = () => reject(new Error('파일 읽기 실패'));
+      r.readAsDataURL(blob);
+    });
+  }
+  async function prepareUpload(file) {
+    if (file.size <= 1.5 * 1024 * 1024) {
+      return { base64: await readAsBase64(file), mime: file.type || 'image/jpeg', name: file.name || 'image.jpg' };
+    }
+    const img = await loadImage(file);
+    const s = Math.min(1, 2000 / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * s);
+    c.height = Math.round(img.naturalHeight * s);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    const blob = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.9));
+    return { base64: await readAsBase64(blob), mime: 'image/jpeg', name: (file.name || 'image').replace(/\.\w+$/, '') + '.jpg' };
+  }
+
+  $('regForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (state.busy) return;
+    const receiver = $('receiver').value.trim();
+    const barcode = $('barcode').value.replace(/\s+/g, '');
+    const expiry = $('expiry').value;
+    if (!state.file) return toast('기프티콘을 스캔하거나 이미지를 선택하세요.', true);
+    if (!receiver) return toast('수신자명을 입력하세요.', true);
+    if (!barcode) return toast('바코드 번호를 입력하세요.', true);
+    if (!expiry) return toast('유효기간을 입력하세요.', true);
+
+    state.busy = true;
+    const btn = $('submitBtn');
+    btn.disabled = true;
+    btn.textContent = '저장 중...';
+    try {
+      const image = await prepareUpload(state.file);
+      const item = await api('add', { receiver, barcode, expiry, image });
+      state.items.push(Object.assign(item, { daysLeft: calcDays(item.expiry) }));
+      saveCache();
+      render();
+      closeSheet();
+      resetForm();
+      toast('등록되었습니다.');
+    } catch (err) {
+      if (!handleAuthError(err)) toast('등록 실패: ' + err.message, true);
+    } finally {
+      state.busy = false;
+      btn.disabled = false;
+      btn.textContent = '등록하기';
+    }
+  });
+
+  /* =========================================================
+   * 이벤트 / 시작
+   * ========================================================= */
+  $('fab').addEventListener('click', () => { openSheet(); getWorker().catch(() => {}); });
+  $('sheetClose').addEventListener('click', closeSheet);
+  $('sheetBackdrop').addEventListener('click', closeSheet);
+  $('refreshBtn').addEventListener('click', loadList);
+  $('modalClose').addEventListener('click', (e) => { e.stopPropagation(); closeModal(); });
+
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeModal(); closeSheet(); closeScanner(); } });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      if (!$('modal').classList.contains('hidden')) requestWakeLock();
+      if (state.cfg) {
+        state.items = normalizeItems(state.items);
+        render();
+      }
+    } else if (scan.active) {
+      closeScanner();
+    }
+  });
+  function updateOnline() {
+    $('offlineBadge').classList.toggle('hidden', navigator.onLine);
+    if (navigator.onLine && state.cfg) loadList();
+  }
+  window.addEventListener('online', updateOnline);
+  window.addEventListener('offline', updateOnline);
+
+  (function init() {
+    state.cfg = lsGet(LS_CFG);
+    $('offlineBadge').classList.toggle('hidden', navigator.onLine);
+    if (!state.cfg) {
+      openSetup(false);
+      updateSummary();
+      return;
+    }
+    const cache = lsGet(LS_CACHE);
+    if (cache && cache.items) {
+      state.items = normalizeItems(cache.items);
+      render();
+    }
+    loadList();
+  })();
+
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  }
+</script>
+</body>
+</html>
